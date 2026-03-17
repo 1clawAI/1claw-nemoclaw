@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.yarn/cache/
+.yarn/install-state.gz
+.pnp.*
+
+# Environment and secrets (never commit real credentials)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+.nemoclaw/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Build and IDE
+dist/
+out/
+*.tsbuildinfo
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+npm-debug.log*
+.npm
+tmp/
+temp/
+/tmp/
+
+# Optional: lockfiles (uncomment if you want to ignore)
+# package-lock.json
+# yarn.lock

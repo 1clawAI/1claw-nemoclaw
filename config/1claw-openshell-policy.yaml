@@ -1,0 +1,208 @@
+# 1claw OpenShell Integration Policy
+# ============================================================
+# Drop this file into your OpenShell sandbox to allow agents
+# to securely fetch secrets from 1claw at runtime while keeping
+# all other egress locked down.
+#
+# Apply:  openshell policy set --sandbox <name> --file 1claw-openshell-policy.yaml
+# Verify: openshell policy get --sandbox <name>
+# ============================================================
+
+version: 1
+
+# ── Filesystem ──────────────────────────────────────────────
+# Static — locked at sandbox creation time.
+# Agents read/write only their working dir and /tmp.
+# 1claw secrets are fetched at runtime; no plaintext files needed.
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /lib64
+    - /proc
+    - /dev/urandom
+    - /etc
+    - /bin
+    - /sbin
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+# ── Landlock LSM ────────────────────────────────────────────
+landlock:
+  compatibility: best_effort
+
+# ── Process identity ────────────────────────────────────────
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# ── Network policies ────────────────────────────────────────
+# Dynamic — hot-reloadable without restarting the sandbox.
+# Each entry: which binaries may reach which endpoints.
+network_policies:
+
+  # ── 1claw Vault API ──────────────────────────────────────
+  # Agents authenticate and fetch decrypted secrets at runtime.
+  # Short-lived JWTs mean the agent never holds a long-lived key.
+  oneclaw_vault_api:
+    name: 1claw-vault-api
+    endpoints:
+      - host: api.1claw.xyz
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        rules:
+          # Auth: exchange agent API key for a short-lived JWT
+          - allow:
+              method: POST
+              path: /v1/auth/agent-token
+          # Vault listing (metadata only, no values exposed)
+          - allow:
+              method: GET
+              path: /v1/vaults
+          - allow:
+              method: GET
+              path: /v1/vaults/**
+          # Secret read (the money operation)
+          - allow:
+              method: GET
+              path: /v1/vaults/*/secrets/**
+          # Secret write (agents that need to store/rotate secrets)
+          - allow:
+              method: POST
+              path: /v1/vaults/*/secrets/**
+          - allow:
+              method: PUT
+              path: /v1/vaults/*/secrets/**
+          # Secret delete (agent can remove secrets it added)
+          - allow:
+              method: DELETE
+              path: /v1/vaults/*/secrets/**
+          # Audit log query
+          - allow:
+              method: GET
+              path: /v1/vaults/*/audit/**
+    binaries:
+      - path: /usr/local/bin/claude
+      - path: /usr/local/bin/openclaw
+      - path: /usr/bin/node
+      - path: /usr/bin/npx
+      - path: /sandbox/.vscode-server/**
+      - path: /sandbox/.local/bin/**
+
+  # ── 1claw MCP Server (hosted) ────────────────────────────
+  # Allows the agent to talk to the hosted MCP endpoint at
+  # mcp.1claw.xyz using the Model Context Protocol over HTTP.
+  oneclaw_mcp_hosted:
+    name: 1claw-mcp-hosted
+    endpoints:
+      - host: mcp.1claw.xyz
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-write
+    binaries:
+      - path: /usr/local/bin/claude
+      - path: /usr/local/bin/openclaw
+      - path: /usr/bin/node
+      - path: /usr/bin/npx
+      - path: /sandbox/.vscode-server/**
+
+  # ── 1claw Shroud TEE LLM Proxy (optional) ───────────────
+  # Route inference through Shroud so secrets are redacted
+  # before they reach any LLM provider. Remove this block if
+  # you're using OpenShell's built-in inference routing instead.
+  oneclaw_shroud_proxy:
+    name: 1claw-shroud-tee-proxy
+    endpoints:
+      - host: shroud.1claw.xyz
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-write
+    binaries:
+      - path: /usr/local/bin/claude
+      - path: /usr/local/bin/openclaw
+      - path: /usr/bin/node
+      - path: /sandbox/.vscode-server/**
+
+  # ── NVIDIA inference (default NemoClaw profile) ──────────
+  # Keep NVIDIA Cloud API access scoped to model inference only.
+  nvidia_inference:
+    name: nvidia-cloud-inference
+    endpoints:
+      - host: integrate.api.nvidia.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-write
+      - host: build.nvidia.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-write
+    binaries:
+      - path: /usr/local/bin/openclaw
+      - path: /usr/bin/node
+      - path: /sandbox/.local/bin/**
+
+  # ── npm registry (package installs inside sandbox) ───────
+  npm_registry:
+    name: npm-registry
+    endpoints:
+      - host: registry.npmjs.org
+        port: 443
+    binaries:
+      - path: /usr/bin/npm
+      - path: /usr/bin/npx
+      - path: /usr/bin/node
+
+  # ── GitHub (read-only; remove if not needed) ─────────────
+  github_readonly:
+    name: github-read-only
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-only
+      - host: github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        rules:
+          - allow:
+              method: GET
+              path: /**/info/refs*
+          - allow:
+              method: POST
+              path: /**/git-upload-pack
+    binaries:
+      - path: /usr/local/bin/claude
+      - path: /usr/local/bin/openclaw
+      - path: /usr/bin/git
+      - path: /usr/bin/gh
+
+# ── Usage notes ─────────────────────────────────────────────
+#
+# Minimal read-only setup (secrets only, no Shroud):
+#   Remove oneclaw_shroud_proxy and oneclaw_mcp_hosted blocks.
+#
+# Audit-only mode (log violations, don't block):
+#   Change enforcement: enforce → enforcement: audit on any block.
+#
+# Rotate network policy without restarting:
+#   openshell policy set --sandbox <name> --file this-file.yaml
+#
+# Pair with NemoClaw blueprint:
+#   nemoclaw setup --policy 1claw-openshell-policy.yaml

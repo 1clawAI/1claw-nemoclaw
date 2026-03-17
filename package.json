@@ -1,0 +1,28 @@
+{
+  "name": "1claw-nemoclaw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "1claw integration for OpenShell / NemoClaw",
+  "scripts": {
+    "test": "bash scripts/test-all.sh",
+    "test:policy": "bash scripts/test-openshell-policy.sh",
+    "test:1claw": "bash scripts/test-1claw-api.sh",
+    "test:blueprint": "bash scripts/test-blueprint.sh",
+    "test:plugin": "node scripts/test-plugin-runner.mjs",
+    "test:plugin:status": "node scripts/test-plugin-runner.mjs status",
+    "test:plugin:help": "node scripts/test-plugin-runner.mjs help",
+    "spin-up": "bash scripts/spin-up-nemoclaw.sh",
+    "do-it-all": "bash scripts/do-it-all.sh",
+    "do-it-all:docker": "bash scripts/do-it-all-docker.sh",
+    "nemoclaw:interactive": "bash scripts/nemoclaw-interactive.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "tsx": "^4.19.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "yarn@3.2.3+sha512.f26f951f67de0c6a33ee381e5ff364709c87e70eb5e65c694e4facde3512f1fa80b8679e6ba31ce7d340fbb46f08dd683af9457e240f25a204be7427940d767e"
+}
