@@ -13,10 +13,10 @@ You run a Linux container on your Mac; inside it you use a gateway and create a 
 So the container can reach it, start a **plaintext** gateway on your Mac:
 
 ```bash
-openshell gateway start --plaintext
+npm run gateway:start
 ```
 
-(If you use `npm run setup:docker`, do this first so the script can register the gateway from inside the container.)
+This runs `openshell gateway start --plaintext` if openshell is installed natively, or starts the gateway inside Docker if not (common on Intel Macs where no `macosx_x86_64` wheel is available). If you use `npm run setup:docker`, do this first so the script can register the gateway from inside the container.
 
 ### 1.1 Start the container
 
@@ -78,8 +78,21 @@ export ONECLAW_VAULT_ID="your-vault-id"
 export ONECLAW_AGENT_ID="your-agent-id"
 export ONECLAW_API_KEY="ocv_..."
 openclaw 1claw status
-openclaw tui
 ```
+
+### 1.5a Start the OpenClaw TUI
+
+The OpenClaw TUI needs its own gateway (separate from the OpenShell gateway). Start it inside the sandbox:
+
+```bash
+openclaw gateway run --auth token --token mytoken --allow-unconfigured &
+sleep 2
+openclaw tui --token mytoken
+```
+
+- `--allow-unconfigured` is required because `gateway.mode` is not set in the sandbox's OpenClaw config.
+- `--auth token --token mytoken` sets a shared token; the TUI uses the same token to connect.
+- The gateway runs in the background (`&`); the TUI connects to it on `ws://127.0.0.1:18789`.
 
 **If you don’t have credentials yet (agent self-onboarding):** the agent can self-enroll with 1claw; the API key is emailed to you. Either:
 
@@ -140,24 +153,21 @@ When you run the setup you will see (at least) two containers in `docker ps`:
 
 | Container | Image | What it is |
 |-----------|--------|------------|
-| **openshell-cluster-openshell** | `nvidia/openshell/cluster:dev` | The **OpenShell gateway**. Started by `openshell gateway start --plaintext` on your Mac. It is the control plane: it runs the gateway API (port 8080), manages sandboxes, and applies policies. This one stays running. |
-| *(random name, e.g. silly_jemison)* | `ubuntu:24.04` | The **setup runner**. Created by `npm run setup:docker`. It installs OpenShell, NemoClaw, registers the gateway, creates the `my-assistant` sandbox, installs the 1claw plugin, and optional skills from `config/skills-to-install.txt`. When the script finishes, this container exits; you can remove it. |
+| **openshell-cluster-openshell** | `nvidia/openshell/cluster:dev` | The **OpenShell gateway**. Started by `npm run gateway:start` (or `openshell gateway start --plaintext`). It is the control plane: it runs the gateway API (port 8080), manages sandboxes, and applies policies. This one stays running. |
+| **1claw-setup** | `ubuntu:24.04` | The **setup runner**. Created by `npm run setup:docker`. It installs OpenShell, NemoClaw, registers the gateway, creates the `my-assistant` sandbox, installs the 1claw plugin, and optional skills from `config/skills-to-install.txt`. When the script finishes, this container exits; you can remove it. |
+| **1claw-interactive** | `ubuntu:24.04` | The **interactive runner**. Created by `npm run nemoclaw:interactive`. Gives you a bash prompt with openshell and NemoClaw pre-installed. |
 
-Sandboxes (e.g. `my-assistant`) run as separate containers or pods managed by the gateway. To connect to a sandbox, use `openshell sandbox connect my-assistant` or `docker exec` into the sandbox container (see 2.1).
+Sandboxes (e.g. `my-assistant`) run as k3s pods inside the gateway container — they are **not** visible as separate Docker containers in `docker ps`. To connect to a sandbox, use `npm run connect` or `openshell sandbox connect my-assistant` (see 2.1).
 
-### 2.1 Easiest: use Docker (no install)
+### 2.1 Easiest: use the connect script (no install)
 
-No NemoClaw install on your Mac. Find the sandbox container and attach:
-
-```bash
-docker ps
-```
-
-Look for a container name that matches your sandbox (e.g. contains `my-assistant` or `openshell`). Then:
+No NemoClaw install on your Mac needed. Run:
 
 ```bash
-docker exec -it <container-name-or-id> bash
+npm run connect
 ```
+
+This uses `openshell sandbox connect` if available natively, otherwise runs it inside Docker (works on Intel Macs). Sandboxes are k3s pods managed by the gateway, so regular `docker exec` won't reach them.
 
 You’re inside the same sandbox as in Path 1. Set `ONECLAW_*` and run `openclaw 1claw status` or `openclaw tui` as in step 1.5.
 
@@ -172,13 +182,25 @@ If you want to run `nemoclaw my-assistant connect` from the Mac instead of `dock
 
 ## Troubleshooting
 
-- **“Gateway failed to start”**  
-  Exit the container. On your Mac: Docker Desktop → Settings → Docker Engine. Add `"default-cgroupns-mode": "host"` to the JSON. Apply & Restart. Start again from 1.1.
+- **Intel Mac: `openshell` CLI won't install natively**
+  The `openshell` PyPI package has no `macosx_x86_64` wheel, so `pip install openshell` (or `uv tool install openshell`) fails on Intel Macs. Use `npm run gateway:start` — it detects this and runs the gateway inside Docker instead. The setup and interactive scripts also run openshell inside Docker, so they work on Intel Macs without changes.
 
-- **“Connection refused” when running `openshell sandbox list` inside the container**  
+- **Docker keychain errors on locked sessions**
+  If Docker commands fail with `error getting credentials - err: exec: “docker-credential-desktop”: ... signal: killed` (common when your Mac session is locked or Screen Sharing disconnects), the macOS Keychain is unavailable. Fix: open `~/.docker/config.json` and change `”credsStore”: “desktop”` to `”credsStore”: “”`. This stores credentials in the config file instead of the Keychain. Re-lock will no longer break Docker pulls.
+
+- **`openclaw tui` says “Missing gateway auth token”**
+  The OpenClaw TUI needs its own gateway running inside the sandbox (separate from the OpenShell gateway). Start it first: `openclaw gateway run --auth token --token mytoken --allow-unconfigured &`, then `openclaw tui --token mytoken`. See step 1.5a.
+
+- **`openclaw gateway run` says “Gateway start blocked: set gateway.mode=local”**
+  Pass `--allow-unconfigured` to bypass: `openclaw gateway run --auth token --token mytoken --allow-unconfigured &`.
+
+- **”Gateway failed to start”**
+  Exit the container. On your Mac: Docker Desktop → Settings → Docker Engine. Add `”default-cgroupns-mode”: “host”` to the JSON. Apply & Restart. Start again from 1.1.
+
+- **”Connection refused” when running `openshell sandbox list` inside the container**
   You skipped 1.2. Run: `openshell gateway add https://host.docker.internal:8080 --local`, then try again.
 
-- **“invalid peer certificate: BadSignature” when running `openshell sandbox create` from your Mac**  
+- **”invalid peer certificate: BadSignature” when running `openshell sandbox create` from your Mac**
   The CLI on your Mac is using TLS certs that don’t match the gateway. Use one of these:
 
   1. **Create the sandbox from inside Docker (recommended)**  
@@ -216,7 +238,7 @@ If you want to run `nemoclaw my-assistant connect` from the Mac instead of `dock
 
 **Without the sandbox (local):** From the repo, set `.env` with 1claw credentials, then run `npm test` (policy, blueprint, plugin).
 
-**Inside the sandbox (full flow):** (1) On your Mac: `openshell gateway start --plaintext`, then `npm run setup:docker`. (2) Connect: `openshell sandbox connect my-assistant` or `nemoclaw my-assistant connect` or `docker exec -it <sandbox-container> bash`. (3) In the sandbox, set `ONECLAW_VAULT_ID`, `ONECLAW_AGENT_ID`, `ONECLAW_API_KEY`, then run `openclaw 1claw status`, `openclaw 1claw ls`, `openclaw 1claw fetch path/to/secret`, or `openclaw tui`. If the openclaw image does not include the 1claw plugin, see [Testing guide](scripts/README-TESTING.md).
+**Inside the sandbox (full flow):** (1) On your Mac: `npm run gateway:start`, then `npm run setup:docker`. (2) Connect: `npm run connect`. (3) In the sandbox, set `ONECLAW_VAULT_ID`, `ONECLAW_AGENT_ID`, `ONECLAW_API_KEY`, then run `openclaw 1claw status`, `openclaw 1claw ls`, `openclaw 1claw fetch path/to/secret`. For the TUI, see step 1.5a. If the openclaw image does not include the 1claw plugin, see [Testing guide](scripts/README-TESTING.md).
 
 ---
 
@@ -224,7 +246,9 @@ If you want to run `nemoclaw my-assistant connect` from the Mac instead of `dock
 
 | Command | Description |
 |--------|-------------|
+| `npm run gateway:start` | Start the OpenShell plaintext gateway. Uses native CLI if available, otherwise runs in Docker (works on Intel Macs). |
 | `npm run setup:docker` | One-shot: install, gateway, create sandbox, apply 1claw policy, optional 1claw agent self-enroll (if `ONECLAW_HUMAN_EMAIL` set), install 1claw plugin, and skills from `config/skills-to-install.txt` (requires `NVIDIA_API_KEY` in `.env`). |
+| `npm run connect` | Connect to the sandbox from your Mac. Uses `openshell sandbox connect` (natively or via Docker). |
 | `npm run plugin:upload` | Upload the 1claw plugin bundle to the sandbox (then in sandbox run `openclaw plugins install /sandbox/1claw-plugin`). |
 | `npm run nemoclaw:interactive` | Start an interactive Docker shell for manual NemoClaw steps. |
 | `npm test` | Run tests (policy, blueprint, plugin). |
